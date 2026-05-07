@@ -1,37 +1,43 @@
-from kafka import KafkaConsumer
-import json
-import logging
 
-import logging
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as f
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%d/%m/%Y %H:%M:%S"
-)
+def main():
+    spark = (
+        SparkSession.builder
+        .appName("ecommerce-orders-streaming-consumer")
+        .getOrCreate()
+    )
 
-logger = logging.getLogger(__name__)
+    df_kafka = (
+        spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "kafka:9092")
+        .option("subscribe", "ecommerce.orders.events")
+        .option("kafka.group.id", "spark_orders_consumer")
+        .option("startingOffsets", "earliest")
+        .load()
+    )
 
+    df_raw = df_kafka.select(
+        f.col("key").cast("string").alias("key"),
+        f.col("value").cast("string").alias("json_value"),
+        f.col("topic"),
+        f.col("partition"),
+        f.col("offset"),
+        f.col("timestamp")
+    )
 
-consumer = KafkaConsumer(
-    'temperature_sensor_topic', #Nome do topico a ser consumido
-    api_version=(3, 8, 0),
-    bootstrap_servers='kafka:9092',
-    auto_offset_reset='earliest', #Le as mensagens desde o início do tópico
-    enable_auto_commit=True, #Confirma automaticamente o consumo das mensagens
-    group_id='clients_consumer_group', #Identificador do grupo de consumidores
-    value_deserializer=lambda v: json.loads(v.decode('utf-8')), #Desserializando os dados de JSON
-)
+    query = (
+        df_raw.writeStream
+        .format("console")
+        .option("checkpointLocation", "./checkpoints/ecommerce_orders")
+        .outputMode("append")
+        .start()
+    )
+
+    query.awaitTermination()
+
 
 if __name__ == "__main__":
-    try:
-        topic = 'temperature_sensor_topic'
-        consumer.subscribe([topic]) #Inscreve-se no tópico para consumir mensagens
-        logger.info(f"Consumindo mensagens do tópico: {topic}")
-        
-        while True:
-            for message in consumer:
-                logger.info(f"Recebido: {message.value}")
-                print(f"Recebido: {message.value}")
-    except Exception as e:
-        logger.error(f"Erro ao consumir dados: {e}")
+    main()
